@@ -5,7 +5,7 @@ meta:
   provider: "DeepSeek"
   description: "DeepSeek V4.1 Flash vision-language MoE (552B backbone; 8B active per prompt token, 16B per output token) combining sliding-window plus compressed sparse attention with a two-level indexer, engram n-gram memory, hyper-connections, and a DSpark multi-token draft head."
   date_added: 2026-09-09
-  date_updated: 2026-09-16
+  date_updated: 2026-09-19
   difficulty: advanced
   tasks:
     - text
@@ -23,6 +23,7 @@ meta:
     gb300: verified
     b300: verified
     mi350x: verified
+    mi325x: verified
 
 model:
   model_id: "deepseek-ai/DeepSeek-V4.1-Flash"
@@ -177,6 +178,24 @@ strategy_overrides:
           - "8192"
           - "--max-num-seqs"
           - "256"
+      mi325x:
+        extra_args:
+          - "--kv-cache-dtype"
+          - "fp8"
+          - "--max-model-len"
+          - "262144"
+          - "--moe-backend"
+          - "auto"
+          - "--mm-encoder-attn-backend"
+          - "ROCM_AITER_FA"
+          - "--mm-encoder-tp-mode"
+          - "data"
+          - "--mm-processor-cache-type"
+          - "shm"
+          - "--limit-mm-per-prompt"
+          - '{"image":1,"video":0}'
+        extra_env:
+          VLLM_ROCM_QUICK_REDUCE_QUANTIZATION: "INT4"
   pd_cluster:
     # Verified 1P1D on GB200 NVL4: one tray per role, TP4 each, NIXL transfer.
     env:
@@ -463,6 +482,28 @@ guide: |
   The command builder defaults to TP2 for B300 (2 of the 8 GPUs). For high
   interactivity, deploy the model using TP4: pass
   `--tensor-parallel-size 4`.
+
+  ## 4xMI325X
+
+  MI325X is gfx942 (CDNA 3), not the CDNA 4 part the MI355X section above was
+  measured on. Validated at TP4 on one node: 262144 context, FP8 KV cache,
+  ROCm 7.2.3, GSM8K 0.905 (flexible-extract, 200 samples, stderr 0.021) across
+  two runs. Read flexible-extract rather than strict-match — with
+  `--reasoning-parser deepseek_v41` the answer follows a reasoning trace, which
+  strict-match scores as a formatting miss.
+
+  Use a nightly built on or after 2026-09-18. Earlier images take an
+  intermittent host SIGSEGV in `libhsa-runtime64` during engine startup on this
+  part, on roughly half of attempts; Kineto registers the affected
+  rocprofiler path at process init, so it fires with no profiler attached.
+  [vllm-project/vllm#57328](https://github.com/vllm-project/vllm/pull/57328)
+  bumps ROCr past it.
+
+  `--moe-backend` is pinned back to `auto` here. On gfx942 `auto` resolves to
+  Triton-unfused: the DeepSeek-V4 priority list prefers `AITER_MXFP4_BF16`,
+  which maps to the CK W4A16 experts and declines on CDNA 3. The generation-wide
+  `--moe-backend aiter` instead takes the explicit branch, which tries only the
+  AITER family — a path not validated on this part.
 
   ## References
 
